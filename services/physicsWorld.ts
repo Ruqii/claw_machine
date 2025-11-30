@@ -112,10 +112,13 @@ export class PhysicsWorld {
         if (b.label === 'Toy') Matter.World.remove(this.engine.world, b);
     });
 
+    // Spawn toys in multiple layers for a dense, realistic look
     for (let i = 0; i < count; i++) {
       // Spawn only in the pit area (0 to 70% width)
-      const x = Math.random() * (this.width * 0.6) + (this.width * 0.05); 
-      const y = Math.random() * -800 - 100; // Start high up
+      const x = Math.random() * (this.width * 0.6) + (this.width * 0.05);
+      // Distribute vertically across multiple layers (-1500 to -100)
+      // This creates a fuller, more realistic pile
+      const y = Math.random() * -1400 - 100;
       this.createKawaiiToy(x, y);
     }
   }
@@ -131,8 +134,8 @@ export class PhysicsWorld {
     const commonOptions = {
       restitution: 0.0,   // No bounce, dead weight
       friction: 0.9,      // High friction
-      frictionAir: 0.001, // Low air resistance (falls fast)
-      density: 0.01,      // Heavy density (was 0.002)
+      frictionAir: 0.08, // Low air resistance (falls fast)
+      density: 0.4,      // Heavy density (was 0.002)
       label: 'Toy',
       render: { fillStyle: color, strokeStyle: '#334155', lineWidth: 3 }
     };

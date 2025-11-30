@@ -1,11 +1,12 @@
 export enum GameState {
-  IDLE = 'IDLE',           // Waiting for hand
-  MOVING = 'MOVING',       // User moving claw with POINT
-  DESCENDING = 'DESCENDING', // Claw dropping (Animation)
-  CLOSING = 'CLOSING',     // Prongs closing
-  LIFTING = 'LIFTING',     // Claw going back up
-  CARRYING = 'CARRYING',   // Moving with potential prize
-  DROPPING = 'DROPPING',   // Releasing toy
+  COUNTDOWN = 'COUNTDOWN',   // Initial countdown (3, 2, 1, GO) - ignore all gestures
+  READY = 'READY',           // Waiting for stable pinch (user can move claw)
+  DESCENDING = 'DESCENDING', // Claw dropping (automated - no gestures)
+  CLOSING = 'CLOSING',       // Prongs closing (automated)
+  LIFTING = 'LIFTING',       // Claw going back up (automated)
+  CARRYING = 'CARRYING',     // User can move claw to EXIT and open to drop
+  DROPPING = 'DROPPING',     // Releasing toy (check if over EXIT)
+  SHOWING_RESULT = 'SHOWING_RESULT', // Display success/fail message
 }
 
 export enum GestureType {

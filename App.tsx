@@ -15,15 +15,19 @@ function App() {
           <div className="bg-pink-50 rounded-xl p-4 mb-6 text-left space-y-3">
              <div className="flex items-center gap-3">
                 <span className="bg-blue-100 text-blue-600 p-2 rounded-lg text-xl">☝️</span>
-                <span className="text-gray-600 font-bold">POINT to Move</span>
+                <span className="text-gray-600 font-bold">POINT to Move Claw</span>
              </div>
              <div className="flex items-center gap-3">
                 <span className="bg-pink-100 text-pink-600 p-2 rounded-lg text-xl">👌</span>
-                <span className="text-gray-600 font-bold">PINCH to Grab</span>
+                <span className="text-gray-600 font-bold">PINCH to Grab (Hold)</span>
              </div>
              <div className="flex items-center gap-3">
                 <span className="bg-green-100 text-green-600 p-2 rounded-lg text-xl">✋</span>
-                <span className="text-gray-600 font-bold">OPEN to Drop</span>
+                <span className="text-gray-600 font-bold">OPEN to Drop in EXIT</span>
+             </div>
+             <div className="flex items-center gap-3">
+                <span className="bg-yellow-100 text-yellow-600 p-2 rounded-lg text-xl">💰</span>
+                <span className="text-gray-600 font-bold">3 Credits to Start</span>
              </div>
           </div>
 

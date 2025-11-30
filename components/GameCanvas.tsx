@@ -16,19 +16,28 @@ export const GameCanvas: React.FC = () => {
   const requestRef = useRef<number>(0);
   
   // State Machine Refs
-  const state = useRef<GameState>(GameState.IDLE);
-  const clawPos = useRef({ x: 0, y: 100 }); 
+  const state = useRef<GameState>(GameState.COUNTDOWN);
+  const clawPos = useRef({ x: 0, y: 100 });
+  const clawTargetPos = useRef({ x: 0, y: 100 });
   const clawDepth = useRef(0);
   const clawAngle = useRef(0); // 0 = Open, 1 = Closed
   const attachedToy = useRef<any>(null);
   const toyConstraint = useRef<any>(null);
-  const dropTimer = useRef(0);
+  const resultTimer = useRef(0);
+  const countdownTimer = useRef(180); // 3 seconds at 60fps
   const isGripUnstable = useRef(false);
 
+  // Pinch gesture debouncing
+  const pinchHistory = useRef<boolean[]>([]);
+  const PINCH_FRAMES_REQUIRED = 8; // Require 8 consecutive frames of pinch
+
   // UI State
-  const [uiState, setUiState] = useState(GameState.IDLE);
+  const [uiState, setUiState] = useState(GameState.COUNTDOWN);
   const [debugGesture, setDebugGesture] = useState<string>('Initializing AI...');
   const [score, setScore] = useState(0);
+  const [credits, setCredits] = useState(3);
+  const [grabResult, setGrabResult] = useState<'success' | 'fail' | null>(null);
+  const [countdownValue, setCountdownValue] = useState(3);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -38,7 +47,7 @@ export const GameCanvas: React.FC = () => {
       if (containerRef.current) {
         // Init Physics immediately so we see walls/toys
         physics.current.init(containerRef.current.clientWidth, containerRef.current.clientHeight);
-        physics.current.spawnToys(12);
+        physics.current.spawnToys(40);
         
         // Set initial claw pos
         clawPos.current = { x: containerRef.current.clientWidth / 2, y: 100 };
@@ -190,36 +199,74 @@ export const GameCanvas: React.FC = () => {
 
   const updateStateMachine = (hand: HandInput, width: number, height: number) => {
     const s = state.current;
-    
-    // Calculate max extension for logic usage
-    const maxExtension = height - clawPos.current.y - 130; 
-    
-    // MOVEMENT - Only move X/Y when POINTING or IDLE (and not carrying)
-    if (s === GameState.MOVING || s === GameState.IDLE || s === GameState.CARRYING) {
-      if (hand.isPresent && hand.gesture !== GestureType.NONE) {
-        if (s === GameState.IDLE) state.current = GameState.MOVING;
 
+    // Calculate max extension for logic usage
+    const maxExtension = height - clawPos.current.y - 130;
+
+    // EXIT zone threshold (right 25% of screen)
+    const exitZoneX = width * 0.75;
+
+    // Helper: Check if pinch is stable (detected for required frames)
+    const isPinchStable = () => {
+      const isPinching = hand.isPresent && hand.gesture === GestureType.PINCH;
+      pinchHistory.current.push(isPinching);
+      if (pinchHistory.current.length > PINCH_FRAMES_REQUIRED) {
+        pinchHistory.current.shift();
+      }
+      return pinchHistory.current.length === PINCH_FRAMES_REQUIRED &&
+             pinchHistory.current.every(p => p === true);
+    };
+
+    // COUNTDOWN STATE - Ignore all gestures, count down
+    if (s === GameState.COUNTDOWN) {
+      countdownTimer.current--;
+
+      // Update countdown display every 60 frames (1 second)
+      if (countdownTimer.current % 60 === 0) {
+        const secondsLeft = Math.ceil(countdownTimer.current / 60);
+        setCountdownValue(secondsLeft);
+      }
+
+      if (countdownTimer.current <= 0) {
+        state.current = GameState.READY;
+        setCountdownValue(0);
+      }
+      return;
+    }
+
+    // READY STATE - Allow hand movement and detect stable PINCH to start grab
+    if (s === GameState.READY) {
+      // Allow claw movement with hand
+      if (hand.isPresent && hand.gesture !== GestureType.NONE) {
         const targetX = hand.x * width;
-        const targetY = hand.y * height * 0.8; 
-        
+        const targetY = hand.y * height * 0.8;
+
         clawPos.current.x += (targetX - clawPos.current.x) * 0.15;
-        // Keep claw hub in upper area, don't let it go too low
+        // Keep claw hub in upper area
         const maxY = height / 3;
         const clampedTargetY = Math.min(targetY, maxY);
         clawPos.current.y += (clampedTargetY - clawPos.current.y) * 0.15;
       }
+
+      // Check for STABLE PINCH to start grab sequence
+      if (isPinchStable() && credits > 0) {
+        // Deduct credit and start grab sequence
+        setCredits(c => c - 1);
+        state.current = GameState.DESCENDING;
+        // Clear pinch history
+        pinchHistory.current = [];
+      } else if (!hand.isPresent || hand.gesture !== GestureType.PINCH) {
+        // Reset pinch history if not pinching
+        pinchHistory.current = [];
+      }
+      return;
     }
 
-    // TRANSITIONS
+    // AUTOMATED GRAB SEQUENCE - Ignore all gestures
     switch (s) {
-      case GameState.MOVING:
-        if (hand.isPresent && hand.gesture === GestureType.PINCH) {
-          state.current = GameState.DESCENDING;
-        }
-        break;
-
       case GameState.DESCENDING:
-        clawDepth.current += 0.04; // Faster drop
+        // Slow, realistic descent (~1.4 seconds at 60fps)
+        clawDepth.current += 0.012;
         if (clawDepth.current >= 1) {
           clawDepth.current = 1;
           state.current = GameState.CLOSING;
@@ -227,7 +274,8 @@ export const GameCanvas: React.FC = () => {
         break;
 
       case GameState.CLOSING:
-        clawAngle.current += 0.08;
+        // Slow, deliberate closing (~0.67 seconds at 60fps)
+        clawAngle.current += 0.025;
         if (clawAngle.current >= 1) {
           clawAngle.current = 1;
           attemptGrab(maxExtension);
@@ -236,39 +284,101 @@ export const GameCanvas: React.FC = () => {
         break;
 
       case GameState.LIFTING:
-        clawDepth.current -= 0.04;
-        
+        // Slow lift matching descent speed
+        clawDepth.current -= 0.012;
+
         // SLIP LOGIC: If grip is unstable, random chance to drop
         if (attachedToy.current && isGripUnstable.current) {
-            if (Math.random() < 0.03) { // 3% chance per frame to slip
-                dropToy(width, true); // True = accidental drop
+          if (Math.random() < 0.03) {
+            // Toy slipped - remove constraint
+            if (toyConstraint.current) {
+              Matter.World.remove(physics.current.engine.world, toyConstraint.current);
+              toyConstraint.current = null;
             }
+            attachedToy.current = null;
+            isGripUnstable.current = false;
+          }
         }
 
         if (clawDepth.current <= 0) {
           clawDepth.current = 0;
+          // Move to CARRYING state (allow user to move and drop)
           state.current = GameState.CARRYING;
         }
         updateConstraint(maxExtension);
         break;
 
       case GameState.CARRYING:
+        // Allow claw movement with hand
+        if (hand.isPresent && hand.gesture !== GestureType.NONE) {
+          const targetX = hand.x * width;
+          const targetY = hand.y * height * 0.8;
+
+          clawPos.current.x += (targetX - clawPos.current.x) * 0.15;
+          const maxY = height / 3;
+          const clampedTargetY = Math.min(targetY, maxY);
+          clawPos.current.y += (clampedTargetY - clawPos.current.y) * 0.15;
+        }
+
         updateConstraint(maxExtension);
 
-        // Release
+        // Check for OPEN gesture to drop
         if (hand.isPresent && hand.gesture === GestureType.OPEN) {
-          dropToy(width, false);
+          state.current = GameState.DROPPING;
         }
         break;
 
       case GameState.DROPPING:
-        dropTimer.current--;
-        if (dropTimer.current <= 0) {
-          clawAngle.current -= 0.05;
-          if (clawAngle.current <= 0) {
-            clawAngle.current = 0;
-            state.current = GameState.IDLE;
+        // Open claw slowly
+        if (clawAngle.current > 0) {
+          clawAngle.current -= 0.025;
+          if (clawAngle.current < 0) clawAngle.current = 0;
+        }
+
+        // Release constraint
+        if (toyConstraint.current) {
+          Matter.World.remove(physics.current.engine.world, toyConstraint.current);
+          toyConstraint.current = null;
+        }
+
+        // Check if we dropped in EXIT zone
+        const isInExitZone = clawPos.current.x >= exitZoneX;
+        const hadToy = !!attachedToy.current;
+
+        if (hadToy && attachedToy.current) {
+          if (isInExitZone) {
+            // SUCCESS! Dropped in exit zone
+            setScore(s => s + 1);
+            // Remove toy after brief delay to show it falling
+            const winningToy = attachedToy.current;
+            setTimeout(() => {
+              physics.current.removeBody(winningToy);
+            }, 500);
+            setGrabResult('success');
+          } else {
+            // FAIL - dropped back in pit
+            setGrabResult('fail');
           }
+        } else {
+          // FAIL - no toy was grabbed
+          setGrabResult('fail');
+        }
+
+        attachedToy.current = null;
+        isGripUnstable.current = false;
+
+        // Move to result display
+        state.current = GameState.SHOWING_RESULT;
+        resultTimer.current = 90; // ~1.5 seconds at 60fps
+        break;
+
+      case GameState.SHOWING_RESULT:
+        resultTimer.current--;
+
+        if (resultTimer.current <= 0) {
+          // Return to READY state
+          setGrabResult(null);
+          state.current = GameState.READY;
         }
         break;
     }
@@ -315,31 +425,6 @@ export const GameCanvas: React.FC = () => {
     }
   };
 
-  const dropToy = (screenWidth: number, isAccidental: boolean) => {
-    const isOverExit = clawPos.current.x > screenWidth * 0.75;
-    
-    if (toyConstraint.current) {
-      Matter.World.remove(physics.current.engine.world, toyConstraint.current);
-      toyConstraint.current = null;
-      
-      if (!isAccidental && isOverExit && attachedToy.current) {
-        // Winning Drop!
-        setScore(s => s + 1);
-        
-        // Keep a reference to the toy to remove it after a delay
-        const winningToy = attachedToy.current;
-        setTimeout(() => {
-          physics.current.removeBody(winningToy);
-        }, 800); // Let it fall for 0.8s then disappear
-      }
-      
-      attachedToy.current = null;
-    }
-    
-    // Animation wait time
-    dropTimer.current = 20; 
-    state.current = GameState.DROPPING;
-  };
 
   // --- RENDERING HELPERS ---
 
@@ -528,17 +613,23 @@ export const GameCanvas: React.FC = () => {
       {/* 3. UI Overlay */}
       <div className="absolute inset-0 z-20 pointer-events-none border-[24px] border-pink-200 rounded-3xl shadow-[inset_0_0_80px_rgba(0,0,0,0.1)]">
         
-        {/* TOP LEFT: Score & Title */}
+        {/* TOP LEFT: Score, Credits & Title */}
         <div className="absolute top-6 left-6 flex flex-col items-start gap-2">
            <div className="bg-white/90 px-6 py-2 rounded-full border-4 border-pink-400 shadow-xl">
               <h1 className="text-xl font-black text-pink-500 tracking-wider">KAWAII CLAW</h1>
            </div>
-           
+
            <div className="bg-yellow-300 px-5 py-3 rounded-2xl border-b-8 border-r-8 border-yellow-500 shadow-lg transform -rotate-2">
               <span className="text-[10px] font-black text-yellow-700 uppercase tracking-widest block">Collected</span>
               <div className="text-3xl font-black text-white drop-shadow-md">{score}</div>
            </div>
-           
+
+           {/* Credits Counter */}
+           <div className="bg-blue-400 px-5 py-3 rounded-2xl border-b-8 border-r-8 border-blue-600 shadow-lg transform rotate-1">
+              <span className="text-[10px] font-black text-blue-800 uppercase tracking-widest block">Credits</span>
+              <div className="text-3xl font-black text-white drop-shadow-md">{credits}</div>
+           </div>
+
            {/* Debug Text */}
            <div className="text-[10px] font-mono text-gray-400 bg-white/50 px-2 rounded mt-2">
               {debugGesture}
@@ -548,30 +639,93 @@ export const GameCanvas: React.FC = () => {
         {/* TOP RIGHT: Gesture Instructions (Status) */}
         <div className="absolute top-6 right-6">
            <div className={`px-6 py-4 rounded-2xl text-white font-bold text-xl shadow-xl transition-all duration-300 border-b-8 border-r-8 transform rotate-1
-             ${uiState === GameState.MOVING ? 'bg-blue-400 border-blue-600' : 
-               uiState === GameState.DESCENDING ? 'bg-purple-400 border-purple-600' :
+             ${uiState === GameState.COUNTDOWN ? 'bg-yellow-400 border-yellow-600' :
+               uiState === GameState.READY ? 'bg-blue-400 border-blue-600' :
+               (uiState === GameState.DESCENDING || uiState === GameState.CLOSING || uiState === GameState.LIFTING) ? 'bg-purple-400 border-purple-600' :
                uiState === GameState.CARRYING ? 'bg-green-400 border-green-600' : 'bg-gray-400 border-gray-600'}`}>
-              
-              {uiState === GameState.IDLE && (
-                 <span className="flex items-center gap-2"><span className="text-2xl">☝️</span> Point to Move</span>
+
+              {uiState === GameState.COUNTDOWN && (
+                 <span className="flex items-center gap-2"><span className="text-2xl">⏰</span> Get Ready!</span>
               )}
-              {uiState === GameState.MOVING && (
+              {uiState === GameState.READY && credits > 0 && (
                  <span className="flex items-center gap-2"><span className="text-2xl">👌</span> Pinch to Grab</span>
+              )}
+              {uiState === GameState.READY && credits === 0 && (
+                 <span className="flex items-center gap-2"><span className="text-2xl">💰</span> Need Credits!</span>
               )}
               {(uiState === GameState.DESCENDING || uiState === GameState.CLOSING || uiState === GameState.LIFTING) && (
                  <span className="animate-pulse">Grabbing...</span>
               )}
               {uiState === GameState.CARRYING && (
-                 <span className="flex items-center gap-2"><span className="text-2xl">✋</span> Open to Drop</span>
+                 <span className="flex items-center gap-2"><span className="text-2xl">✋</span> Move to EXIT & Open</span>
               )}
-              {uiState === GameState.DROPPING && "Yay! Dropping!"}
+              {uiState === GameState.DROPPING && (
+                 <span className="animate-pulse">Dropping...</span>
+              )}
+              {uiState === GameState.SHOWING_RESULT && grabResult === 'success' && (
+                 <span className="flex items-center gap-2"><span className="text-2xl">🎉</span> You Won!</span>
+              )}
+              {uiState === GameState.SHOWING_RESULT && grabResult === 'fail' && (
+                 <span className="flex items-center gap-2"><span className="text-2xl">😢</span> Try Again!</span>
+              )}
            </div>
         </div>
 
-        {/* Exit Zone Indicator */}
-        <div className="absolute bottom-0 right-0 w-[25%] h-[200px] bg-gradient-to-t from-black/10 to-transparent border-l-4 border-dashed border-white/40 flex items-end justify-center pb-8">
-           <span className="text-white font-black text-2xl tracking-widest opacity-80 animate-bounce">EXIT</span>
-        </div>
+        {/* CENTER: Countdown Display */}
+        {uiState === GameState.COUNTDOWN && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+            <div className="text-center">
+              {countdownValue > 0 ? (
+                <div className="text-[200px] font-black text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.5)] animate-bounce">
+                  {countdownValue}
+                </div>
+              ) : (
+                <div className="text-[120px] font-black text-green-400 drop-shadow-[0_10px_20px_rgba(0,0,0,0.5)] animate-pulse">
+                  GO!
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* CENTER: No Credits Message & Purchase Button */}
+        {credits === 0 && uiState === GameState.READY && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-auto">
+            <div className="bg-white/95 p-8 rounded-3xl shadow-2xl border-b-8 border-pink-400 max-w-sm">
+              <div className="text-5xl mb-4 text-center">💰</div>
+              <h2 className="text-2xl font-black text-pink-500 mb-3 text-center">Out of Credits!</h2>
+              <p className="text-gray-600 mb-6 text-center">Purchase more credits to keep playing</p>
+              <button
+                onClick={() => setCredits(3)}
+                className="w-full bg-pink-500 hover:bg-pink-600 text-white font-bold text-xl py-4 rounded-xl shadow-lg active:scale-95 transition-transform"
+              >
+                Add 3 Credits
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* CENTER: Result Display */}
+        {uiState === GameState.SHOWING_RESULT && grabResult && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+            <div className={`p-12 rounded-3xl shadow-2xl border-b-8 transform scale-110 ${
+              grabResult === 'success' ? 'bg-green-400 border-green-600' : 'bg-orange-400 border-orange-600'
+            }`}>
+              <div className="text-8xl mb-4 text-center animate-bounce">
+                {grabResult === 'success' ? '🎉' : '😢'}
+              </div>
+              <h2 className="text-4xl font-black text-white drop-shadow-lg text-center">
+                {grabResult === 'success' ? 'SUCCESS!' : 'OH NO!'}
+              </h2>
+              {grabResult === 'success' && (
+                <p className="text-white text-xl mt-2 text-center font-bold">You caught a kawaii friend!</p>
+              )}
+              {grabResult === 'fail' && (
+                <p className="text-white text-xl mt-2 text-center font-bold">Better luck next time!</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,0 +1,7 @@
+{
+  "name": "Kawaii AR Claw Machine",
+  "description": "A cute AR claw machine game controlled by hand gestures.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

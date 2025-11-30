@@ -6,7 +6,6 @@ export enum GameState {
   LIFTING = 'LIFTING',       // Claw going back up (automated)
   CARRYING = 'CARRYING',     // User can move claw to EXIT and open to drop
   DROPPING = 'DROPPING',     // Releasing toy (check if over EXIT)
-  SHOWING_RESULT = 'SHOWING_RESULT', // Display success/fail message
 }
 
 export enum GestureType {

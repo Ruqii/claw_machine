@@ -23,7 +23,6 @@ export const GameCanvas: React.FC = () => {
   const clawAngle = useRef(0); // 0 = Open, 1 = Closed
   const attachedToy = useRef<any>(null);
   const toyConstraint = useRef<any>(null);
-  const resultTimer = useRef(0);
   const countdownTimer = useRef(180); // 3 seconds at 60fps
   const isGripUnstable = useRef(false);
 
@@ -36,7 +35,6 @@ export const GameCanvas: React.FC = () => {
   const [debugGesture, setDebugGesture] = useState<string>('Initializing AI...');
   const [score, setScore] = useState(0);
   const [credits, setCredits] = useState(3);
-  const [grabResult, setGrabResult] = useState<'success' | 'fail' | null>(null);
   const [countdownValue, setCountdownValue] = useState(3);
   const [isReady, setIsReady] = useState(false);
 
@@ -347,39 +345,23 @@ export const GameCanvas: React.FC = () => {
 
         if (hadToy && attachedToy.current) {
           if (isInExitZone) {
-            // SUCCESS! Dropped in exit zone
+            // SUCCESS! Dropped in exit zone - increment score silently
             setScore(s => s + 1);
             // Remove toy after brief delay to show it falling
             const winningToy = attachedToy.current;
             setTimeout(() => {
               physics.current.removeBody(winningToy);
             }, 500);
-            setGrabResult('success');
-          } else {
-            // FAIL - dropped back in pit
-            setGrabResult('fail');
           }
-        } else {
-          // FAIL - no toy was grabbed
-          setGrabResult('fail');
+          // If dropped in pit, toy stays in game (no message)
         }
+        // If no toy was grabbed, just continue (no message)
 
         attachedToy.current = null;
         isGripUnstable.current = false;
 
-        // Move to result display
-        state.current = GameState.SHOWING_RESULT;
-        resultTimer.current = 90; // ~1.5 seconds at 60fps
-        break;
-
-      case GameState.SHOWING_RESULT:
-        resultTimer.current--;
-
-        if (resultTimer.current <= 0) {
-          // Return to READY state
-          setGrabResult(null);
-          state.current = GameState.READY;
-        }
+        // Return directly to READY state (no result display)
+        state.current = GameState.READY;
         break;
     }
   };
@@ -662,12 +644,6 @@ export const GameCanvas: React.FC = () => {
               {uiState === GameState.DROPPING && (
                  <span className="animate-pulse">Dropping...</span>
               )}
-              {uiState === GameState.SHOWING_RESULT && grabResult === 'success' && (
-                 <span className="flex items-center gap-2"><span className="text-2xl">🎉</span> You Won!</span>
-              )}
-              {uiState === GameState.SHOWING_RESULT && grabResult === 'fail' && (
-                 <span className="flex items-center gap-2"><span className="text-2xl">😢</span> Try Again!</span>
-              )}
            </div>
         </div>
 
@@ -701,28 +677,6 @@ export const GameCanvas: React.FC = () => {
               >
                 Add 3 Credits
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* CENTER: Result Display */}
-        {uiState === GameState.SHOWING_RESULT && grabResult && (
-          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-            <div className={`p-12 rounded-3xl shadow-2xl border-b-8 transform scale-110 ${
-              grabResult === 'success' ? 'bg-green-400 border-green-600' : 'bg-orange-400 border-orange-600'
-            }`}>
-              <div className="text-8xl mb-4 text-center animate-bounce">
-                {grabResult === 'success' ? '🎉' : '😢'}
-              </div>
-              <h2 className="text-4xl font-black text-white drop-shadow-lg text-center">
-                {grabResult === 'success' ? 'SUCCESS!' : 'OH NO!'}
-              </h2>
-              {grabResult === 'success' && (
-                <p className="text-white text-xl mt-2 text-center font-bold">You caught a kawaii friend!</p>
-              )}
-              {grabResult === 'fail' && (
-                <p className="text-white text-xl mt-2 text-center font-bold">Better luck next time!</p>
-              )}
             </div>
           </div>
         )}

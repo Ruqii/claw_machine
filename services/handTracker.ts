@@ -90,8 +90,8 @@ export class HandTrackerService {
       
       let rawGesture = GestureType.POINT;
 
-      // Pinch threshold - tuned for typical Z-depth
-      if (pinchDist < 0.08) {
+      // Pinch threshold - strict to prevent false positives
+      if (pinchDist < 0.05) {
         rawGesture = GestureType.PINCH;
       } 
       // Open hand: Fingers extended and pinch is NOT active
@@ -135,8 +135,8 @@ export class HandTrackerService {
       counts[g] = (counts[g] || 0) + 1;
     }
 
-    const threshold = Math.ceil(this.HISTORY_SIZE * 0.6);
-    
+    const threshold = Math.ceil(this.HISTORY_SIZE * 0.85); // Require 85% consistency
+
     // Priority: PINCH > OPEN > POINT
     if ((counts[GestureType.PINCH] || 0) >= threshold) return GestureType.PINCH;
     if ((counts[GestureType.OPEN] || 0) >= threshold) return GestureType.OPEN;

@@ -25,6 +25,8 @@ export const GameCanvas: React.FC = () => {
   const toyConstraint = useRef<any>(null);
   const countdownTimer = useRef(180); // 3 seconds at 60fps
   const isGripUnstable = useRef(false);
+  const droppingToy = useRef<any>(null); // Track toy falling for success detection
+  const targetDescentDepth = useRef(1); // Target descent depth (0-1), defaults to full descent
 
   // Pinch gesture debouncing
   const pinchHistory = useRef<boolean[]>([]);
@@ -37,6 +39,7 @@ export const GameCanvas: React.FC = () => {
   const [credits, setCredits] = useState(3);
   const [countdownValue, setCountdownValue] = useState(3);
   const [isReady, setIsReady] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -234,6 +237,9 @@ export const GameCanvas: React.FC = () => {
 
     // READY STATE - Allow hand movement and detect stable PINCH to start grab
     if (s === GameState.READY) {
+      // Ensure claw is OPEN in idle state
+      clawAngle.current = 0;
+
       // Allow claw movement with hand
       if (hand.isPresent && hand.gesture !== GestureType.NONE) {
         const targetX = hand.x * width;
@@ -253,6 +259,69 @@ export const GameCanvas: React.FC = () => {
         state.current = GameState.DESCENDING;
         // Clear pinch history
         pinchHistory.current = [];
+
+        // Raycast downward to find nearest toy
+        const rayStart = { x: clawPos.current.x, y: clawPos.current.y };
+        const rayEnd = { x: clawPos.current.x, y: height };
+        const worldBodies = Matter.Composite.allBodies(physics.current.engine.world);
+
+        // Call raycast with proper parameters (rayWidth = 5 for narrow vertical ray)
+        const collisions = Matter.Query.ray(worldBodies, rayStart, rayEnd, 5);
+
+        console.log('Raycast from:', rayStart, 'to:', rayEnd);
+        console.log('Total bodies in world:', worldBodies.length);
+        console.log('Collisions found:', collisions.length);
+
+        // Find the nearest toy
+        let nearestToy = null;
+        let nearestDistance = Infinity;
+
+        for (const collision of collisions) {
+          // Get the parent body (handles compound bodies correctly)
+          const body = collision.body.parent || collision.body;
+
+          // Filter for toys only
+          if (body.label === 'Toy') {
+            const distance = body.position.y - clawPos.current.y;
+            if (distance > 0 && distance < nearestDistance) {
+              nearestDistance = distance;
+              nearestToy = body;
+            }
+          }
+        }
+
+        console.log('Nearest toy found:', nearestToy ? 'Yes' : 'No');
+
+        // Calculate target descent depth
+        if (nearestToy) {
+          // Find the top of the toy (minimum y value of all vertices)
+          // Skip index 0 (self-reference) and scan actual parts
+          let topY = Infinity;
+
+          const parts = nearestToy.parts.length > 1 ? nearestToy.parts.slice(1) : nearestToy.parts;
+          for (const part of parts) {
+            if (part.vertices) {
+              for (const vertex of part.vertices) {
+                if (vertex.y < topY) {
+                  topY = vertex.y;
+                }
+              }
+            }
+          }
+
+          console.log('Toy top Y:', topY, 'Claw Y:', clawPos.current.y);
+
+          // Calculate depth as ratio: stop just above the toy's top
+          const toyTopDistance = topY - clawPos.current.y - 60; // 60px clearance for claw prongs
+          const targetDepth = Math.min(1, Math.max(0.1, toyTopDistance / maxExtension));
+          targetDescentDepth.current = targetDepth;
+
+          console.log('Target descent depth:', targetDepth);
+        } else {
+          // No toy found below - descend to ground level (90% of max)
+          targetDescentDepth.current = 0.9;
+          console.log('No toy found, descending to ground level (0.9)');
+        }
       } else if (!hand.isPresent || hand.gesture !== GestureType.PINCH) {
         // Reset pinch history if not pinching
         pinchHistory.current = [];
@@ -263,10 +332,10 @@ export const GameCanvas: React.FC = () => {
     // AUTOMATED GRAB SEQUENCE - Ignore all gestures
     switch (s) {
       case GameState.DESCENDING:
-        // Slow, realistic descent (~1.4 seconds at 60fps)
+        // Slow, realistic descent - stop at target depth (toy or full)
         clawDepth.current += 0.012;
-        if (clawDepth.current >= 1) {
-          clawDepth.current = 1;
+        if (clawDepth.current >= targetDescentDepth.current) {
+          clawDepth.current = targetDescentDepth.current;
           state.current = GameState.CLOSING;
         }
         break;
@@ -300,8 +369,17 @@ export const GameCanvas: React.FC = () => {
 
         if (clawDepth.current <= 0) {
           clawDepth.current = 0;
-          // Move to CARRYING state (allow user to move and drop)
-          state.current = GameState.CARRYING;
+
+          // Check if we actually grabbed a toy
+          if (attachedToy.current) {
+            // SUCCESS - Move to CARRYING state (user can move and drop)
+            state.current = GameState.CARRYING;
+          } else {
+            // FAILED GRAB - Open claw and return to READY
+            clawAngle.current = 0;
+            state.current = GameState.READY;
+            isGripUnstable.current = false;
+          }
         }
         updateConstraint(maxExtension);
         break;
@@ -333,35 +411,43 @@ export const GameCanvas: React.FC = () => {
           if (clawAngle.current < 0) clawAngle.current = 0;
         }
 
-        // Release constraint
+        // Release constraint once
         if (toyConstraint.current) {
           Matter.World.remove(physics.current.engine.world, toyConstraint.current);
           toyConstraint.current = null;
-        }
 
-        // Check if we dropped in EXIT zone
-        const isInExitZone = clawPos.current.x >= exitZoneX;
-        const hadToy = !!attachedToy.current;
-
-        if (hadToy && attachedToy.current) {
-          if (isInExitZone) {
-            // SUCCESS! Dropped in exit zone - increment score silently
-            setScore(s => s + 1);
-            // Remove toy after brief delay to show it falling
-            const winningToy = attachedToy.current;
-            setTimeout(() => {
-              physics.current.removeBody(winningToy);
-            }, 500);
+          // Check if we dropped in EXIT zone with a toy
+          const isInExitZone = clawPos.current.x >= exitZoneX;
+          if (attachedToy.current && isInExitZone) {
+            // Track toy for success detection (let it fall with physics)
+            droppingToy.current = attachedToy.current;
           }
-          // If dropped in pit, toy stays in game (no message)
+          // Clear attached toy
+          attachedToy.current = null;
         }
-        // If no toy was grabbed, just continue (no message)
 
-        attachedToy.current = null;
-        isGripUnstable.current = false;
+        // Check if we're tracking a toy falling in exit zone
+        if (droppingToy.current) {
+          // Check if toy has fallen off screen
+          if (droppingToy.current.position.y > height + 100) {
+            // Remove toy from physics world
+            physics.current.removeBody(droppingToy.current);
+            droppingToy.current = null;
 
-        // Return directly to READY state (no result display)
-        state.current = GameState.READY;
+            // Increment score and show success message
+            setScore(s => s + 1);
+            setShowSuccess(true);
+            setTimeout(() => {
+              setShowSuccess(false);
+            }, 2500);
+          }
+        }
+
+        // Return to READY once claw is fully open and no toy being tracked
+        if (clawAngle.current === 0 && !droppingToy.current) {
+          state.current = GameState.READY;
+          isGripUnstable.current = false;
+        }
         break;
     }
   };
@@ -677,6 +763,17 @@ export const GameCanvas: React.FC = () => {
               >
                 Add 3 Credits
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* SUCCESS MESSAGE: Shown after toy falls off screen in exit zone */}
+        {showSuccess && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div className="bg-gradient-to-br from-yellow-300 to-yellow-400 p-10 rounded-3xl shadow-2xl border-b-8 border-r-8 border-yellow-600 max-w-md animate-bounce">
+              <div className="text-7xl mb-4 text-center">🎉</div>
+              <h2 className="text-4xl font-black text-white drop-shadow-lg mb-3 text-center">SUCCESS!</h2>
+              <p className="text-yellow-900 font-bold text-xl text-center">Congratulations! You caught a prize!</p>
             </div>
           </div>
         )}

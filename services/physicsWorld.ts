@@ -127,52 +127,59 @@ export class PhysicsWorld {
     const type = Math.random();
     const color = this.colors[Math.floor(Math.random() * this.colors.length)];
     const scale = 0.9 + Math.random() * 0.3;
-    
-    let body;
 
-    // HEAVIER PHYSICS
-    const commonOptions = {
+    // Physics properties - applied ONLY to compound body
+    const compoundOptions = {
       restitution: 0.0,   // No bounce, dead weight
       friction: 0.9,      // High friction
       frictionAir: 0.08, // Low air resistance (falls fast)
-      density: 0.4,      // Heavy density (was 0.002)
+      density: 0.4,      // Heavy density
       label: 'Toy',
       render: { fillStyle: color, strokeStyle: '#334155', lineWidth: 3 }
     };
 
+    // Step 1: Create main body with physics options
+    const body = Matter.Body.create(compoundOptions);
+
     if (type < 0.33) {
       // BEAR: Head + 2 Ears
-      const head = Matter.Bodies.circle(x, y, 25 * scale, commonOptions);
-      const leftEar = Matter.Bodies.circle(x - 20 * scale, y - 22 * scale, 12 * scale, commonOptions);
-      const rightEar = Matter.Bodies.circle(x + 20 * scale, y - 22 * scale, 12 * scale, commonOptions);
-      
-      body = Matter.Body.create({
-        parts: [head, leftEar, rightEar],
-        ...commonOptions
-      });
+      // Step 2: Create parts at RELATIVE positions (0,0) center
+      const head = Matter.Bodies.circle(0, 0, 25 * scale);
+      const leftEar = Matter.Bodies.circle(-20 * scale, -22 * scale, 12 * scale);
+      const rightEar = Matter.Bodies.circle(20 * scale, -22 * scale, 12 * scale);
+
+      // Step 3: Use setParts to create rigid compound body
+      Matter.Body.setParts(body, [body, head, leftEar, rightEar]);
+
+      // Step 4: Position the entire compound body at world coordinates
+      Matter.Body.setPosition(body, { x: x, y: y });
     } else if (type < 0.66) {
       // BUNNY: Head + 2 Long Ears
-      const head = Matter.Bodies.circle(x, y, 24 * scale, commonOptions);
-      const leftEar = Matter.Bodies.rectangle(x - 12 * scale, y - 35 * scale, 12 * scale, 35 * scale, { ...commonOptions, chamfer: { radius: 6 } });
-      const rightEar = Matter.Bodies.rectangle(x + 12 * scale, y - 35 * scale, 12 * scale, 35 * scale, { ...commonOptions, chamfer: { radius: 6 } });
-      
-      body = Matter.Body.create({
-        parts: [head, leftEar, rightEar],
-        ...commonOptions
-      });
+      // Step 2: Create parts at RELATIVE positions (0,0) center
+      const head = Matter.Bodies.circle(0, 0, 24 * scale);
+      const leftEar = Matter.Bodies.rectangle(-12 * scale, -35 * scale, 12 * scale, 35 * scale, { chamfer: { radius: 6 } });
+      const rightEar = Matter.Bodies.rectangle(12 * scale, -35 * scale, 12 * scale, 35 * scale, { chamfer: { radius: 6 } });
+
+      // Step 3: Use setParts to create rigid compound body
+      Matter.Body.setParts(body, [body, head, leftEar, rightEar]);
+
+      // Step 4: Position the entire compound body at world coordinates
+      Matter.Body.setPosition(body, { x: x, y: y });
     } else {
       // CUBE CAT: Rounded Box + Triangle Ears
-      const head = Matter.Bodies.rectangle(x, y, 48 * scale, 42 * scale, { ...commonOptions, chamfer: { radius: 12 } });
-      const leftEar = Matter.Bodies.polygon(x - 18 * scale, y - 25 * scale, 3, 12 * scale, commonOptions);
-      const rightEar = Matter.Bodies.polygon(x + 18 * scale, y - 25 * scale, 3, 12 * scale, commonOptions);
-      
+      // Step 2: Create parts at RELATIVE positions (0,0) center
+      const head = Matter.Bodies.rectangle(0, 0, 48 * scale, 42 * scale, { chamfer: { radius: 12 } });
+      const leftEar = Matter.Bodies.polygon(-18 * scale, -25 * scale, 3, 12 * scale);
+      const rightEar = Matter.Bodies.polygon(18 * scale, -25 * scale, 3, 12 * scale);
+
       Matter.Body.rotate(leftEar, -0.4);
       Matter.Body.rotate(rightEar, 0.4);
 
-      body = Matter.Body.create({
-        parts: [head, leftEar, rightEar],
-        ...commonOptions
-      });
+      // Step 3: Use setParts to create rigid compound body
+      Matter.Body.setParts(body, [body, head, leftEar, rightEar]);
+
+      // Step 4: Position the entire compound body at world coordinates
+      Matter.Body.setPosition(body, { x: x, y: y });
     }
 
     Matter.World.add(this.engine.world, body);

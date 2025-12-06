@@ -29,10 +29,6 @@ npm run build
 npm run preview
 ```
 
-**Environment Setup:**
-- Set `GEMINI_API_KEY` in `.env.local` (required for hand tracking AI service)
-- The API key is exposed to the client via Vite's `process.env.GEMINI_API_KEY`
-
 ## Architecture Overview
 
 ### State Machine (GameState enum in types.ts)

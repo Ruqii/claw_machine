@@ -11,7 +11,7 @@ export const GameCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Game Logic Refs
-  const handTracker = useRef(new HandTrackerService({ apiKey: process.env.API_KEY }));
+  const handTracker = useRef(new HandTrackerService());
   const physics = useRef(new PhysicsWorld({}));
   const requestRef = useRef<number>(0);
   

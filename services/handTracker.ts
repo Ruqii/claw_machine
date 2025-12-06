@@ -18,8 +18,6 @@ export class HandTrackerService {
   private gestureHistory: GestureType[] = [];
   private readonly HISTORY_SIZE = 5;
 
-  constructor(private config: { apiKey?: string }) {}
-
   async initialize() {
     // Dynamic import from CDN to ensure correct ESM loading
     // @ts-ignore

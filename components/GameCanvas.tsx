@@ -395,14 +395,23 @@ export const GameCanvas: React.FC = () => {
         // Slow lift matching descent speed
         clawDepth.current -= 0.012;
 
-        // SLIP LOGIC: Grabs have a small chance to slip during lifting
+        // SLIP LOGIC: Realistic slip chances like real claw machines
         if (attachedToy.current) {
-          // Unstable grabs (>15px): 0.5% per frame slip chance (~33% total over 83 frames)
-          // Stable grabs (0-15px): 0.15% per frame slip chance (~12% total over 83 frames)
-          const slipChance = isGripUnstable.current ? 0.005 : 0.0015;
+          // Base slip rates (per frame):
+          // Stable grabs (0-7px): 0.35% per frame
+          // Unstable grabs (>7px): 1.2% per frame
+          let baseSlipChance = isGripUnstable.current ? 0.012 : 0.0035;
 
-          if (Math.random() < slipChance) {
-            console.log('💧 TOY SLIPPED during LIFTING! Unstable:', isGripUnstable.current);
+          // Early lift penalty: First 40% of lift has higher slip chance
+          // This simulates the initial jerk when lifting starts
+          const liftProgress = 1 - clawDepth.current; // 0 at bottom, 1 at top
+          if (liftProgress < 0.4) {
+            // Double the slip chance during early lift (realistic!)
+            baseSlipChance *= 2;
+          }
+
+          if (Math.random() < baseSlipChance) {
+            console.log('💧 TOY SLIPPED during LIFTING! Unstable:', isGripUnstable.current, 'Progress:', (liftProgress * 100).toFixed(1) + '%');
             // Toy slipped - remove constraint
             if (toyConstraint.current) {
               Matter.World.remove(physics.current.engine.world, toyConstraint.current);
@@ -542,8 +551,8 @@ export const GameCanvas: React.FC = () => {
 
     console.log('🎯 Attempting grab at claw position:', { x, y });
 
-    // Grab radius: 35px (increased from 20px for better success rate)
-    const toy = physics.current.findToyAt(x, y, 35);
+    // Grab radius: 22px (reduced for realistic difficulty)
+    const toy = physics.current.findToyAt(x, y, 22);
 
     if (toy) {
       console.log('✅ Found toy! Position:', toy.position, 'Parts:', toy.parts.length);
@@ -552,7 +561,7 @@ export const GameCanvas: React.FC = () => {
       // Calculate offset for "Slippery" logic
       const dist = Math.hypot(toy.position.x - x, toy.position.y - y);
       console.log('📏 Distance from claw to toy center:', dist, 'px');
-      isGripUnstable.current = dist > 15; // If > 15px off-center, it's unstable (relaxed from 8px)
+      isGripUnstable.current = dist > 7; // If > 7px off-center, it's unstable (realistic threshold)
 
       toyConstraint.current = Matter.Constraint.create({
         pointA: { x: x, y: y },

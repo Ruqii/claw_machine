@@ -16,9 +16,10 @@ export const GameCanvas: React.FC = () => {
   const requestRef = useRef<number>(0);
   
   // State Machine Refs
+  const CLAW_TOP_HEIGHT = 50; // Fixed height for idle/aiming - raised for more tension
   const state = useRef<GameState>(GameState.COUNTDOWN);
-  const clawPos = useRef({ x: 0, y: 100 });
-  const clawTargetPos = useRef({ x: 0, y: 100 });
+  const clawPos = useRef({ x: 0, y: CLAW_TOP_HEIGHT });
+  const clawTargetPos = useRef({ x: 0, y: CLAW_TOP_HEIGHT });
   const clawDepth = useRef(0);
   const clawAngle = useRef(0); // 0 = Open, 1 = Closed
   const attachedToy = useRef<any>(null);
@@ -49,9 +50,9 @@ export const GameCanvas: React.FC = () => {
         // Init Physics immediately so we see walls/toys
         physics.current.init(containerRef.current.clientWidth, containerRef.current.clientHeight);
         physics.current.spawnToys(40);
-        
-        // Set initial claw pos
-        clawPos.current = { x: containerRef.current.clientWidth / 2, y: 100 };
+
+        // Set initial claw pos at fixed top height
+        clawPos.current = { x: containerRef.current.clientWidth / 2, y: CLAW_TOP_HEIGHT };
       }
 
       // Start Loop Immediately
@@ -240,16 +241,13 @@ export const GameCanvas: React.FC = () => {
       // Ensure claw is OPEN in idle state
       clawAngle.current = 0;
 
-      // Allow claw movement with hand
-      if (hand.isPresent && hand.gesture !== GestureType.NONE) {
-        const targetX = hand.x * width;
-        const targetY = hand.y * height * 0.8;
+      // Force claw to stay at fixed top height (no vertical movement)
+      clawPos.current.y = CLAW_TOP_HEIGHT;
 
-        clawPos.current.x += (targetX - clawPos.current.x) * 0.15;
-        // Keep claw hub in upper area
-        const maxY = height / 3;
-        const clampedTargetY = Math.min(targetY, maxY);
-        clawPos.current.y += (clampedTargetY - clawPos.current.y) * 0.15;
+      // Allow HORIZONTAL movement whenever hand is present (faster response)
+      if (hand.isPresent) {
+        const targetX = hand.x * width;
+        clawPos.current.x += (targetX - clawPos.current.x) * 0.25; // Increased from 0.15 for less lag
       }
 
       // Check for STABLE PINCH to start grab sequence
@@ -294,24 +292,34 @@ export const GameCanvas: React.FC = () => {
 
         // Calculate target descent depth
         if (nearestToy) {
-          // Find the top of the toy (minimum y value of all vertices)
-          // Skip index 0 (self-reference) and scan actual parts
+          // Find the top of the toy's HEAD ONLY (ignore ears)
+          // parts[0] = self-reference, parts[1] = head (main body), parts[2+] = ears (visual only)
           let topY = Infinity;
 
-          const parts = nearestToy.parts.length > 1 ? nearestToy.parts.slice(1) : nearestToy.parts;
-          for (const part of parts) {
-            if (part.vertices) {
-              for (const vertex of part.vertices) {
-                if (vertex.y < topY) {
-                  topY = vertex.y;
+          // Only scan the HEAD part (index 1) - ears are visual-only
+          if (nearestToy.parts.length > 1 && nearestToy.parts[1].vertices) {
+            const headPart = nearestToy.parts[1];
+            for (const vertex of headPart.vertices) {
+              if (vertex.y < topY) {
+                topY = vertex.y;
+              }
+            }
+          } else {
+            // Fallback: single-part body, use all vertices
+            for (const part of nearestToy.parts) {
+              if (part.vertices) {
+                for (const vertex of part.vertices) {
+                  if (vertex.y < topY) {
+                    topY = vertex.y;
+                  }
                 }
               }
             }
           }
 
-          console.log('Toy top Y:', topY, 'Claw Y:', clawPos.current.y);
+          console.log('Toy head top Y:', topY, 'Claw Y:', clawPos.current.y);
 
-          // Calculate depth as ratio: stop just above the toy's top
+          // Calculate depth as ratio: stop just above the toy's head
           const toyTopDistance = topY - clawPos.current.y - 60; // 60px clearance for claw prongs
           const targetDepth = Math.min(1, Math.max(0.1, toyTopDistance / maxExtension));
           targetDescentDepth.current = targetDepth;
@@ -354,9 +362,13 @@ export const GameCanvas: React.FC = () => {
         // Slow lift matching descent speed
         clawDepth.current -= 0.012;
 
-        // SLIP LOGIC: If grip is unstable, random chance to drop
-        if (attachedToy.current && isGripUnstable.current) {
-          if (Math.random() < 0.03) {
+        // SLIP LOGIC: ALL grabs have a chance to slip during lifting
+        if (attachedToy.current) {
+          // Unstable grabs (10-25px): 3% per frame slip chance
+          // Stable grabs (0-10px): 0.7% per frame slip chance
+          const slipChance = isGripUnstable.current ? 0.03 : 0.007;
+
+          if (Math.random() < slipChance) {
             // Toy slipped - remove constraint
             if (toyConstraint.current) {
               Matter.World.remove(physics.current.engine.world, toyConstraint.current);
@@ -385,15 +397,13 @@ export const GameCanvas: React.FC = () => {
         break;
 
       case GameState.CARRYING:
-        // Allow claw movement with hand
-        if (hand.isPresent && hand.gesture !== GestureType.NONE) {
-          const targetX = hand.x * width;
-          const targetY = hand.y * height * 0.8;
+        // Force claw to stay at fixed top height (no vertical movement)
+        clawPos.current.y = CLAW_TOP_HEIGHT;
 
-          clawPos.current.x += (targetX - clawPos.current.x) * 0.15;
-          const maxY = height / 3;
-          const clampedTargetY = Math.min(targetY, maxY);
-          clawPos.current.y += (clampedTargetY - clawPos.current.y) * 0.15;
+        // Allow HORIZONTAL movement whenever hand is present (faster response)
+        if (hand.isPresent) {
+          const targetX = hand.x * width;
+          clawPos.current.x += (targetX - clawPos.current.x) * 0.25; // Increased from 0.15 for less lag
         }
 
         updateConstraint(maxExtension);

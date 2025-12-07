@@ -190,16 +190,28 @@ export class PhysicsWorld {
     let closest = null;
     let minDist = radius;
 
+    console.log('🔍 findToyAt searching at:', { x, y }, 'radius:', radius);
+
+    const toysInRange: any[] = [];
     for (const body of bodies) {
       if (body.label !== 'Toy') continue;
-      
+
       // Rough distance check to CoM
       const dist = Math.hypot(body.position.x - x, body.position.y - y);
+
+      if (dist <= radius) {
+        toysInRange.push({ body, dist, position: body.position });
+      }
+
       if (dist < minDist) {
         minDist = dist;
         closest = body;
       }
     }
+
+    console.log('📦 Toys in range:', toysInRange.length, toysInRange);
+    console.log('🎯 Closest toy:', closest ? { dist: minDist, position: closest.position } : 'None');
+
     return closest;
   }
 

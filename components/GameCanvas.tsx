@@ -17,7 +17,7 @@ export const GameCanvas: React.FC = () => {
   
   // State Machine Refs
   const CLAW_TOP_HEIGHT = 50; // Fixed height for idle/aiming - raised for more tension
-  const state = useRef<GameState>(GameState.COUNTDOWN);
+  const state = useRef<GameState>(GameState.WAITING_FOR_TOYS);
   const clawPos = useRef({ x: 0, y: CLAW_TOP_HEIGHT });
   const clawTargetPos = useRef({ x: 0, y: CLAW_TOP_HEIGHT });
   const clawDepth = useRef(0);
@@ -28,16 +28,22 @@ export const GameCanvas: React.FC = () => {
   const isGripUnstable = useRef(false);
   const droppingToy = useRef<any>(null); // Track toy falling for success detection
   const targetDescentDepth = useRef(1); // Target descent depth (0-1), defaults to full descent
+  const creditsRef = useRef(5); // Synchronous credit tracking to prevent race conditions
+  const toysSettleTimer = useRef(0); // Timer for waiting for toys to settle
 
-  // Pinch gesture debouncing
-  const pinchHistory = useRef<boolean[]>([]);
-  const PINCH_FRAMES_REQUIRED = 8; // Require 8 consecutive frames of pinch
+  // Pinch gesture edge detection (single pinch trigger)
+  const lastGesture = useRef<GestureType>(GestureType.NONE);
+  const hasTriggeredGrab = useRef(false); // Prevent multiple grabs from one pinch
+
+  // OPEN gesture stability tracking for release
+  const openGestureFrames = useRef(0);
+  const OPEN_FRAMES_REQUIRED = 15; // Require 15 consecutive frames (~0.25s) to prevent false positives
 
   // UI State
-  const [uiState, setUiState] = useState(GameState.COUNTDOWN);
+  const [uiState, setUiState] = useState(GameState.WAITING_FOR_TOYS);
   const [debugGesture, setDebugGesture] = useState<string>('Initializing AI...');
   const [score, setScore] = useState(0);
-  const [credits, setCredits] = useState(3);
+  const [credits, setCredits] = useState(5);
   const [countdownValue, setCountdownValue] = useState(3);
   const [isReady, setIsReady] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -146,7 +152,9 @@ export const GameCanvas: React.FC = () => {
     // STATE MACHINE
     updateStateMachine(hand, width, height);
 
-    if (state.current !== uiState) setUiState(state.current);
+    if (state.current !== uiState) {
+      setUiState(state.current);
+    }
 
     // --- 2. RENDER ---
     ctx.clearRect(0, 0, width, height);
@@ -208,16 +216,48 @@ export const GameCanvas: React.FC = () => {
     // EXIT zone threshold (right 25% of screen)
     const exitZoneX = width * 0.75;
 
-    // Helper: Check if pinch is stable (detected for required frames)
-    const isPinchStable = () => {
-      const isPinching = hand.isPresent && hand.gesture === GestureType.PINCH;
-      pinchHistory.current.push(isPinching);
-      if (pinchHistory.current.length > PINCH_FRAMES_REQUIRED) {
-        pinchHistory.current.shift();
-      }
-      return pinchHistory.current.length === PINCH_FRAMES_REQUIRED &&
-             pinchHistory.current.every(p => p === true);
+    // Helper: Detect pinch gesture edge (transition from non-pinch to pinch)
+    const isPinchTriggered = () => {
+      const currentGesture = hand.gesture;
+      const wasPinch = lastGesture.current === GestureType.PINCH;
+      const isPinchNow = currentGesture === GestureType.PINCH;
+
+      // Update last gesture for next frame
+      lastGesture.current = currentGesture;
+
+      // Return true only on rising edge (transition to PINCH)
+      return !wasPinch && isPinchNow && hand.isPresent;
     };
+
+    // Helper: Check if all toys have settled (velocity near zero)
+    const areToysSettled = () => {
+      const allBodies = Matter.Composite.allBodies(physics.current.engine.world);
+      const toys = allBodies.filter(body => body.label === 'Toy');
+
+      if (toys.length === 0) return false; // No toys found yet, keep waiting
+
+      // Check if all toys have low velocity (settled) - relaxed threshold
+      const velocityThreshold = 2.0; // Relaxed threshold - toys just need to be mostly settled
+      return toys.every(toy => {
+        const speed = Math.hypot(toy.velocity.x, toy.velocity.y);
+        return speed < velocityThreshold;
+      });
+    };
+
+    // WAITING_FOR_TOYS STATE - Wait for all toys to settle before countdown
+    if (s === GameState.WAITING_FOR_TOYS) {
+      toysSettleTimer.current++;
+
+      // Maximum wait time: 5 seconds (300 frames at 60fps)
+      const MAX_SETTLE_TIME = 300;
+
+      if (areToysSettled() || toysSettleTimer.current >= MAX_SETTLE_TIME) {
+        state.current = GameState.COUNTDOWN;
+        setUiState(GameState.COUNTDOWN);
+        toysSettleTimer.current = 0; // Reset timer
+      }
+      return;
+    }
 
     // COUNTDOWN STATE - Ignore all gestures, count down
     if (s === GameState.COUNTDOWN) {
@@ -236,10 +276,14 @@ export const GameCanvas: React.FC = () => {
       return;
     }
 
-    // READY STATE - Allow hand movement and detect stable PINCH to start grab
+    // READY STATE - Allow hand movement and detect single PINCH to start grab
     if (s === GameState.READY) {
       // Ensure claw is OPEN in idle state
       clawAngle.current = 0;
+
+      // Reset grab trigger flag when entering READY state
+      hasTriggeredGrab.current = false;
+      openGestureFrames.current = 0;
 
       // Force claw to stay at fixed top height (no vertical movement)
       clawPos.current.y = CLAW_TOP_HEIGHT;
@@ -250,13 +294,16 @@ export const GameCanvas: React.FC = () => {
         clawPos.current.x += (targetX - clawPos.current.x) * 0.25; // Increased from 0.15 for less lag
       }
 
-      // Check for STABLE PINCH to start grab sequence
-      if (isPinchStable() && credits > 0) {
-        // Deduct credit and start grab sequence
-        setCredits(c => c - 1);
+      // Check for PINCH TRIGGER (single pinch, not continuous hold) to start grab sequence
+      if (isPinchTriggered() && creditsRef.current > 0 && !hasTriggeredGrab.current) {
+        // Mark that we've triggered a grab
+        hasTriggeredGrab.current = true;
+
+        // Deduct credit synchronously to prevent race conditions
+        creditsRef.current -= 1;
+        setCredits(creditsRef.current);
+
         state.current = GameState.DESCENDING;
-        // Clear pinch history
-        pinchHistory.current = [];
 
         // Raycast downward to find nearest toy
         const rayStart = { x: clawPos.current.x, y: clawPos.current.y };
@@ -265,10 +312,6 @@ export const GameCanvas: React.FC = () => {
 
         // Call raycast with proper parameters (rayWidth = 5 for narrow vertical ray)
         const collisions = Matter.Query.ray(worldBodies, rayStart, rayEnd, 5);
-
-        console.log('Raycast from:', rayStart, 'to:', rayEnd);
-        console.log('Total bodies in world:', worldBodies.length);
-        console.log('Collisions found:', collisions.length);
 
         // Find the nearest toy
         let nearestToy = null;
@@ -287,8 +330,6 @@ export const GameCanvas: React.FC = () => {
             }
           }
         }
-
-        console.log('Nearest toy found:', nearestToy ? 'Yes' : 'No');
 
         // Calculate target descent depth
         if (nearestToy) {
@@ -317,22 +358,14 @@ export const GameCanvas: React.FC = () => {
             }
           }
 
-          console.log('Toy head top Y:', topY, 'Claw Y:', clawPos.current.y);
-
           // Calculate depth as ratio: stop just above the toy's head
-          const toyTopDistance = topY - clawPos.current.y - 60; // 60px clearance for claw prongs
+          const toyTopDistance = topY - clawPos.current.y - 40; // 40px clearance for claw prongs (reduced for difficulty)
           const targetDepth = Math.min(1, Math.max(0.1, toyTopDistance / maxExtension));
           targetDescentDepth.current = targetDepth;
-
-          console.log('Target descent depth:', targetDepth);
         } else {
           // No toy found below - descend to ground level (90% of max)
           targetDescentDepth.current = 0.9;
-          console.log('No toy found, descending to ground level (0.9)');
         }
-      } else if (!hand.isPresent || hand.gesture !== GestureType.PINCH) {
-        // Reset pinch history if not pinching
-        pinchHistory.current = [];
       }
       return;
     }
@@ -362,13 +395,14 @@ export const GameCanvas: React.FC = () => {
         // Slow lift matching descent speed
         clawDepth.current -= 0.012;
 
-        // SLIP LOGIC: ALL grabs have a chance to slip during lifting
+        // SLIP LOGIC: Grabs have a small chance to slip during lifting
         if (attachedToy.current) {
-          // Unstable grabs (10-25px): 3% per frame slip chance
-          // Stable grabs (0-10px): 0.7% per frame slip chance
-          const slipChance = isGripUnstable.current ? 0.03 : 0.007;
+          // Unstable grabs (>15px): 0.5% per frame slip chance (~33% total over 83 frames)
+          // Stable grabs (0-15px): 0.15% per frame slip chance (~12% total over 83 frames)
+          const slipChance = isGripUnstable.current ? 0.005 : 0.0015;
 
           if (Math.random() < slipChance) {
+            console.log('💧 TOY SLIPPED during LIFTING! Unstable:', isGripUnstable.current);
             // Toy slipped - remove constraint
             if (toyConstraint.current) {
               Matter.World.remove(physics.current.engine.world, toyConstraint.current);
@@ -382,12 +416,16 @@ export const GameCanvas: React.FC = () => {
         if (clawDepth.current <= 0) {
           clawDepth.current = 0;
 
+          console.log('📍 LIFTING完成! attachedToy:', attachedToy.current ? 'YES' : 'NO', 'constraint:', toyConstraint.current ? 'YES' : 'NO');
+
           // Check if we actually grabbed a toy
           if (attachedToy.current) {
             // SUCCESS - Move to CARRYING state (user can move and drop)
+            console.log('✅ 进入CARRYING状态 - 玩具已抓稳！');
             state.current = GameState.CARRYING;
           } else {
             // FAILED GRAB - Open claw and return to READY
+            console.log('❌ 抓取失败 - 返回READY状态');
             clawAngle.current = 0;
             state.current = GameState.READY;
             isGripUnstable.current = false;
@@ -400,21 +438,43 @@ export const GameCanvas: React.FC = () => {
         // Force claw to stay at fixed top height (no vertical movement)
         clawPos.current.y = CLAW_TOP_HEIGHT;
 
-        // Allow HORIZONTAL movement whenever hand is present (faster response)
+        // Allow HORIZONTAL movement whenever hand is present (any gesture)
         if (hand.isPresent) {
           const targetX = hand.x * width;
-          clawPos.current.x += (targetX - clawPos.current.x) * 0.25; // Increased from 0.15 for less lag
+          clawPos.current.x += (targetX - clawPos.current.x) * 0.25;
         }
 
         updateConstraint(maxExtension);
 
-        // Check for OPEN gesture to drop
+        // Check if toy is still attached
+        if (!attachedToy.current || !toyConstraint.current) {
+          console.log('⚠️ CARRYING状态中玩具丢失! attachedToy:', attachedToy.current ? 'YES' : 'NO', 'constraint:', toyConstraint.current ? 'YES' : 'NO');
+          state.current = GameState.READY;
+          clawAngle.current = 0;
+          openGestureFrames.current = 0;
+          break;
+        }
+
+        // Track OPEN gesture - require stable detection to prevent false positives
         if (hand.isPresent && hand.gesture === GestureType.OPEN) {
+          openGestureFrames.current++;
+          console.log('🖐️ OPEN手势计数:', openGestureFrames.current, '/', OPEN_FRAMES_REQUIRED);
+        } else {
+          openGestureFrames.current = 0; // Reset if not OPEN
+        }
+
+        // Release when OPEN gesture is held stably
+        if (openGestureFrames.current >= OPEN_FRAMES_REQUIRED) {
+          console.log('✅ 稳定OPEN手势确认 - 释放玩具！');
           state.current = GameState.DROPPING;
+          openGestureFrames.current = 0;
         }
         break;
 
       case GameState.DROPPING:
+        // Reset OPEN gesture counter
+        openGestureFrames.current = 0;
+
         // Open claw slowly
         if (clawAngle.current > 0) {
           clawAngle.current -= 0.025;
@@ -464,31 +524,35 @@ export const GameCanvas: React.FC = () => {
 
   const updateConstraint = (maxExtension: number) => {
     if (attachedToy.current && toyConstraint.current) {
-        const depth = clawDepth.current; 
+        const depth = clawDepth.current;
         const extension = depth * maxExtension;
-        const y = clawPos.current.y + extension; 
-        
-        // Update anchor to follow claw tip
-        toyConstraint.current.pointA = { x: clawPos.current.x, y: y + 40 }; 
+        const y = clawPos.current.y + extension;
+
+        // Update anchor to follow claw tip (aligned with attemptGrab offset)
+        toyConstraint.current.pointA = { x: clawPos.current.x, y: y + 60 };
     }
   };
 
   const attemptGrab = (maxExtension: number) => {
     // Claw tip position (visual)
-    const depth = clawDepth.current; 
+    const depth = clawDepth.current;
     const extension = depth * maxExtension;
     const x = clawPos.current.x;
-    const y = clawPos.current.y + extension + 80; // Approximate grip center
+    const y = clawPos.current.y + extension + 60; // Adjusted grip center (was 80, now 60 for better accuracy)
 
-    // DIFFICULTY UPDATE: Strict Radius (25px)
-    const toy = physics.current.findToyAt(x, y, 25);
-    
+    console.log('🎯 Attempting grab at claw position:', { x, y });
+
+    // Grab radius: 35px (increased from 20px for better success rate)
+    const toy = physics.current.findToyAt(x, y, 35);
+
     if (toy) {
+      console.log('✅ Found toy! Position:', toy.position, 'Parts:', toy.parts.length);
       attachedToy.current = toy;
-      
+
       // Calculate offset for "Slippery" logic
       const dist = Math.hypot(toy.position.x - x, toy.position.y - y);
-      isGripUnstable.current = dist > 10; // If > 10px off-center, it's unstable
+      console.log('📏 Distance from claw to toy center:', dist, 'px');
+      isGripUnstable.current = dist > 15; // If > 15px off-center, it's unstable (relaxed from 8px)
 
       toyConstraint.current = Matter.Constraint.create({
         pointA: { x: x, y: y },
@@ -717,11 +781,15 @@ export const GameCanvas: React.FC = () => {
         {/* TOP RIGHT: Gesture Instructions (Status) */}
         <div className="absolute top-6 right-6">
            <div className={`px-6 py-4 rounded-2xl text-white font-bold text-xl shadow-xl transition-all duration-300 border-b-8 border-r-8 transform rotate-1
-             ${uiState === GameState.COUNTDOWN ? 'bg-yellow-400 border-yellow-600' :
+             ${uiState === GameState.WAITING_FOR_TOYS ? 'bg-orange-400 border-orange-600' :
+               uiState === GameState.COUNTDOWN ? 'bg-yellow-400 border-yellow-600' :
                uiState === GameState.READY ? 'bg-blue-400 border-blue-600' :
                (uiState === GameState.DESCENDING || uiState === GameState.CLOSING || uiState === GameState.LIFTING) ? 'bg-purple-400 border-purple-600' :
                uiState === GameState.CARRYING ? 'bg-green-400 border-green-600' : 'bg-gray-400 border-gray-600'}`}>
 
+              {uiState === GameState.WAITING_FOR_TOYS && (
+                 <span className="flex items-center gap-2 animate-pulse"><span className="text-2xl">🎪</span> Toys Settling...</span>
+              )}
               {uiState === GameState.COUNTDOWN && (
                  <span className="flex items-center gap-2"><span className="text-2xl">⏰</span> Get Ready!</span>
               )}
@@ -735,13 +803,28 @@ export const GameCanvas: React.FC = () => {
                  <span className="animate-pulse">Grabbing...</span>
               )}
               {uiState === GameState.CARRYING && (
-                 <span className="flex items-center gap-2"><span className="text-2xl">✋</span> Move to EXIT & Open</span>
+                 <span className="flex items-center gap-2"><span className="text-2xl">✋</span> Open Hand to Release</span>
               )}
               {uiState === GameState.DROPPING && (
                  <span className="animate-pulse">Dropping...</span>
               )}
            </div>
         </div>
+
+        {/* CENTER: Waiting for Toys Display */}
+        {uiState === GameState.WAITING_FOR_TOYS && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div className="text-center">
+              <div className="text-7xl mb-4 animate-bounce">🎪</div>
+              <div className="text-5xl font-black text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.5)] animate-pulse">
+                Please Wait...
+              </div>
+              <div className="text-2xl font-bold text-white/80 mt-4">
+                Toys are settling
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* CENTER: Countdown Display */}
         {uiState === GameState.COUNTDOWN && (
@@ -761,17 +844,18 @@ export const GameCanvas: React.FC = () => {
         )}
 
         {/* CENTER: No Credits Message & Purchase Button */}
-        {credits === 0 && uiState === GameState.READY && (
+        {/* Only show when truly in READY state (not during active grab sequence) */}
+        {creditsRef.current === 0 && state.current === GameState.READY && (
           <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-auto">
             <div className="bg-white/95 p-8 rounded-3xl shadow-2xl border-b-8 border-pink-400 max-w-sm">
               <div className="text-5xl mb-4 text-center">💰</div>
               <h2 className="text-2xl font-black text-pink-500 mb-3 text-center">Out of Credits!</h2>
               <p className="text-gray-600 mb-6 text-center">Purchase more credits to keep playing</p>
               <button
-                onClick={() => setCredits(3)}
-                className="w-full bg-pink-500 hover:bg-pink-600 text-white font-bold text-xl py-4 rounded-xl shadow-lg active:scale-95 transition-transform"
+                className="w-full bg-gray-400 text-white font-bold text-xl py-4 rounded-xl shadow-lg cursor-not-allowed opacity-60"
+                disabled
               >
-                Add 3 Credits
+                Add Credits (Coming Soon)
               </button>
             </div>
           </div>

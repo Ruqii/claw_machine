@@ -1,4 +1,5 @@
 export enum GameState {
+  WAITING_FOR_TOYS = 'WAITING_FOR_TOYS', // Waiting for toys to settle after spawn
   COUNTDOWN = 'COUNTDOWN',   // Initial countdown (3, 2, 1, GO) - ignore all gestures
   READY = 'READY',           // Waiting for stable pinch (user can move claw)
   DESCENDING = 'DESCENDING', // Claw dropping (automated - no gestures)

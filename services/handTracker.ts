@@ -76,24 +76,33 @@ export class HandTrackerService {
       // 2. Detect Gesture
       // Calculate pinch distance
       const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
-      
-      // Check if other fingers are extended (roughly)
-      // If finger tips are above wrist (y is smaller is higher), they are extended "up"
-      // But simpler check: distance from wrist
+
+      // Check if ALL fingers are extended (stricter for OPEN gesture)
+      // For OPEN: all 5 fingers should be far from palm/wrist
+      const indexDist = this.dist(indexTip, wrist);
+      const middleDist = this.dist(middleTip, wrist);
+      const ringDist = this.dist(ringTip, wrist);
+      const pinkyDist = this.dist(pinkyTip, wrist);
+      const thumbDist = this.dist(thumbTip, wrist);
+
+      // All fingers must be significantly extended (stricter threshold)
       const isPalmOpen = (
-        this.dist(middleTip, wrist) > 0.1 && 
-        this.dist(ringTip, wrist) > 0.1 && 
-        this.dist(pinkyTip, wrist) > 0.1
+        indexDist > 0.15 &&
+        middleDist > 0.15 &&
+        ringDist > 0.15 &&
+        pinkyDist > 0.12 &&
+        thumbDist > 0.12 &&
+        pinchDist > 0.15 // Thumb and index must be very far apart
       );
-      
+
       let rawGesture = GestureType.POINT;
 
       // Pinch threshold - strict to prevent false positives
       if (pinchDist < 0.05) {
         rawGesture = GestureType.PINCH;
-      } 
-      // Open hand: Fingers extended and pinch is NOT active
-      else if (isPalmOpen && pinchDist > 0.12) {
+      }
+      // Open hand: ALL fingers extended and spread wide
+      else if (isPalmOpen) {
         rawGesture = GestureType.OPEN;
       }
 

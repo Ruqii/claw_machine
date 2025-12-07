@@ -395,23 +395,50 @@ export const GameCanvas: React.FC = () => {
         // Slow lift matching descent speed
         clawDepth.current -= 0.012;
 
-        // SLIP LOGIC: Realistic slip chances like real claw machines
+        // PHYSICAL FAILURE: Add lateral sway to create instability
+        if (attachedToy.current && toyConstraint.current) {
+          const liftProgress = 1 - clawDepth.current; // 0 at bottom, 1 at top
+
+          // Apply oscillating lateral force (swinging motion)
+          const swayFrequency = 0.15; // Oscillation speed
+          const swayAmplitude = liftProgress * 25; // Stronger sway as we go higher
+          const swayForceX = Math.sin(performance.now() * swayFrequency) * swayAmplitude;
+
+          Matter.Body.applyForce(attachedToy.current, attachedToy.current.position, {
+            x: swayForceX * 0.00001,
+            y: 0
+          });
+
+          // Debug: Log sway occasionally (not every frame)
+          if (Math.floor(performance.now() / 1000) % 2 === 0 && Math.random() < 0.01) {
+            console.log('🌊 Sway force applied. Progress:', (liftProgress * 100).toFixed(0) + '%', 'Force:', swayForceX.toFixed(2));
+          }
+        }
+
+        // SLIP LOGIC: Late-stage failure (opposite of real initial jerk)
+        // Grabbing doesn't mean you've won - tension builds as you rise
         if (attachedToy.current) {
           // Base slip rates (per frame):
-          // Stable grabs (0-7px): 0.35% per frame
+          // Stable grabs (0-7px): 0.6% per frame
           // Unstable grabs (>7px): 1.2% per frame
-          let baseSlipChance = isGripUnstable.current ? 0.012 : 0.0035;
+          let baseSlipChance = isGripUnstable.current ? 0.012 : 0.006;
 
-          // Early lift penalty: First 40% of lift has higher slip chance
-          // This simulates the initial jerk when lifting starts
           const liftProgress = 1 - clawDepth.current; // 0 at bottom, 1 at top
-          if (liftProgress < 0.4) {
-            // Double the slip chance during early lift (realistic!)
-            baseSlipChance *= 2;
+
+          // LATE-stage failure: Last 40% of lift has higher slip chance
+          // This creates tension - even successful grabs can fail near the top!
+          if (liftProgress > 0.6) {
+            const lateMultiplier = 1 + (liftProgress - 0.6) * 3; // Ramps up to 2.2x
+            baseSlipChance *= lateMultiplier;
+          }
+
+          // Debug: Log slip probability periodically
+          if (Math.random() < 0.02) { // 2% of frames
+            console.log('🎲 LIFTING slip check. Progress:', (liftProgress * 100).toFixed(0) + '%', 'Unstable:', isGripUnstable.current, 'Slip chance:', (baseSlipChance * 100).toFixed(2) + '%');
           }
 
           if (Math.random() < baseSlipChance) {
-            console.log('💧 TOY SLIPPED during LIFTING! Unstable:', isGripUnstable.current, 'Progress:', (liftProgress * 100).toFixed(1) + '%');
+            console.log('💧 TOY SLIPPED during LIFTING! Unstable:', isGripUnstable.current, 'Progress:', (liftProgress * 100).toFixed(1) + '%', 'Slip chance was:', (baseSlipChance * 100).toFixed(2) + '%');
             // Toy slipped - remove constraint
             if (toyConstraint.current) {
               Matter.World.remove(physics.current.engine.world, toyConstraint.current);
@@ -462,6 +489,41 @@ export const GameCanvas: React.FC = () => {
           clawAngle.current = 0;
           openGestureFrames.current = 0;
           break;
+        }
+
+        // PHYSICAL FAILURE: Continued sway and vibration during carry
+        if (attachedToy.current) {
+          // Random vibration forces (simulates unstable grip at top)
+          const vibrationX = (Math.random() - 0.5) * 15;
+          Matter.Body.applyForce(attachedToy.current, attachedToy.current.position, {
+            x: vibrationX * 0.000005,
+            y: 0
+          });
+
+          // CRITICAL: Exit zone slip probability
+          // Even if you make it to the exit, toy can still slip!
+          const isInExitZone = clawPos.current.x >= exitZoneX;
+          let carrySlipChance = isGripUnstable.current ? 0.007 : 0.003; // Base carry slip (0.3%/0.7% per frame)
+
+          if (isInExitZone) {
+            // Higher slip in exit zone (2x multiplier)
+            // Victory is not guaranteed even at the goal!
+            carrySlipChance *= 2.0;
+          }
+
+          if (Math.random() < carrySlipChance) {
+            console.log('💧 TOY SLIPPED during CARRYING! In Exit Zone:', isInExitZone);
+            if (toyConstraint.current) {
+              Matter.World.remove(physics.current.engine.world, toyConstraint.current);
+              toyConstraint.current = null;
+            }
+            attachedToy.current = null;
+            isGripUnstable.current = false;
+            state.current = GameState.READY;
+            clawAngle.current = 0;
+            openGestureFrames.current = 0;
+            break;
+          }
         }
 
         // Track OPEN gesture - require stable detection to prevent false positives

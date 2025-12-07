@@ -19,7 +19,7 @@ function App() {
              </div>
              <div className="flex items-center gap-3">
                 <span className="bg-pink-100 text-pink-600 p-2 rounded-lg text-xl">👌</span>
-                <span className="text-gray-600 font-bold">PINCH to Grab (Hold)</span>
+                <span className="text-gray-600 font-bold">PINCH to Grab</span>
              </div>
              <div className="flex items-center gap-3">
                 <span className="bg-green-100 text-green-600 p-2 rounded-lg text-xl">✋</span>
@@ -27,7 +27,7 @@ function App() {
              </div>
              <div className="flex items-center gap-3">
                 <span className="bg-yellow-100 text-yellow-600 p-2 rounded-lg text-xl">💰</span>
-                <span className="text-gray-600 font-bold">3 Credits to Start</span>
+                <span className="text-gray-600 font-bold">5 Credits to Start</span>
              </div>
           </div>
 
